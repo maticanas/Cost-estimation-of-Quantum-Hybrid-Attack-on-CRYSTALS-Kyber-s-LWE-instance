@@ -22,8 +22,12 @@ def compute_l_tr(l_r):
     return 26 + l_r
 
 def compute_l_p(l_t, f, r, k):
-    """Computes l_p = l_t + ceil(fr + 2log2(k))."""
-    return l_t + ceil(f * r  + 2 * math.log2(k))
+    #"""Computes l_p = l_t + ceil(fr + 2log2(k))."""
+    #return l_t + ceil(f * r  + 2 * math.log2(k))
+    """Computes l_p = l_t  + \ceil log2(k) - log2(1 - 2^(-1/(kL))) \ceil"""
+    L = f*r
+    term = 1 - 2 ** (-1 / (k * L))
+    return l_t +  ceil(math.log2(k) - math.log2(term))
 
 def compute_l_tilde_b(l_p):
     """Computes l_tilde_b = 12 + l_p."""
