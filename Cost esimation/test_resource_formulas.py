@@ -11,6 +11,7 @@ from scipy.special import beta, betainc
 
 import Q_Toffoli_cost as QTC
 import Q_gate_cost as QGC
+import FT_gate_cost as QFT
 import Total_cost_estimation as TOTAL
 
 
@@ -147,6 +148,102 @@ def test_cbd_moments_and_qrom_bounds() -> None:
                     eta, width, coefficient
                 )
                 assert exact <= bound
+
+
+def test_exact_qsearch_exponents_for_rotation_budget() -> None:
+    assert math.isclose(
+        QFT.qsearch_exponent_from_eta(2), 1.1081084645, abs_tol=1e-10
+    )
+    assert math.isclose(
+        QFT.qsearch_exponent_from_eta(3), 1.3021849954, abs_tol=1e-10
+    )
+
+
+def test_rotation_synthesis_budget_at_paper_optima() -> None:
+    expected = {
+        256: (37, 59, 246),
+        512: (96, 137, 558),
+        768: (185, 218, 882),
+        1024: (261, 303, 1222),
+    }
+    for n, (r, b_rot, t_r) in expected.items():
+        result = QFT.rotation_synthesis_resources(n, r)
+        assert result["rotation_precision_bits"] == b_rot
+        assert result["rotation_T_per_gate"] == t_r
+
+
+def test_ft_normalization_at_paper_optima() -> None:
+    # Coarse QSearch resources stored by the latest estimator at the four
+    # selected optima.  The tolerance is 0.002 bits because the manuscript
+    # tables display three-decimal rounded values.
+    cases = {
+        256: {
+            "r": 37,
+            "prob": -24.344339993363686,
+            "coarse": {
+                "toffoli_depth": 73.18067500342234,
+                "toffoli_count": 79.53289492150567,
+                "gate_depth": 75.32032058912418,
+                "gate_count": 83.34877918385601,
+            },
+            "expected": (76.692, 84.345, 82.340, 101.037, 108.689),
+        },
+        512: {
+            "r": 96,
+            "prob": -29.439571937406296,
+            "coarse": {
+                "toffoli_depth": 151.7735598249121,
+                "toffoli_count": 158.7202641306876,
+                "gate_depth": 153.87124671736257,
+                "gate_count": 162.76753306325338,
+            },
+            "expected": (155.269, 163.653, 161.527, 184.709, 193.093),
+        },
+        768: {
+            "r": 185,
+            "prob": -14.468571993749105,
+            "coarse": {
+                "toffoli_depth": 232.89082270619002,
+                "toffoli_count": 240.3025245257223,
+                "gate_depth": 235.06575547006773,
+                "gate_count": 244.56812953996686,
+            },
+            "expected": (236.417, 245.357, 243.110, 250.886, 259.826),
+        },
+        1024: {
+            "r": 261,
+            "prob": -20.81019487359316,
+            "coarse": {
+                "toffoli_depth": 317.9108546516111,
+                "toffoli_count": 325.6001082321252,
+                "gate_depth": 320.0716883338594,
+                "gate_count": 329.94956893977974,
+            },
+            "expected": (321.431, 330.704, 328.407, 342.241, 351.514),
+        },
+    }
+
+    for n, case in cases.items():
+        ft = QFT.compute_ft_resources_from_log2(
+            n, case["r"], case["coarse"]
+        )
+        success = QFT.add_success_probability(ft, case["prob"])
+        actual = (
+            ft["QSearch_FT_depth_log2"],
+            ft["QSearch_FT_gate_count_log2"],
+            ft["QSearch_FT_T_count_log2"],
+            success["Hybrid_FT_depth_per_success_log2"],
+            success["Hybrid_FT_gate_count_per_success_log2"],
+        )
+        for value, target in zip(actual, case["expected"]):
+            assert math.isclose(value, target, rel_tol=0.0, abs_tol=0.002)
+
+
+def test_current_nist_maxdepth_references() -> None:
+    for n, exponent in ((512, 170), (768, 233), (1024, 298)):
+        for h in QFT.MAXDEPTH_EXPONENTS:
+            assert QFT.nist_aes_reference_log2(n, h) == exponent - h
+    assert QFT.nist_aes_reference_log2(256, 40) is None
 
 
 if __name__ == "__main__":

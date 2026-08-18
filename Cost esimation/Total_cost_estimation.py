@@ -31,7 +31,7 @@ import os
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,7 @@ from scipy.special import betainc
 
 import Q_Toffoli_cost as QTC
 import Q_gate_cost as QGC
+import FT_gate_cost as QFT
 
 
 MODEL_VERSION = "2026-08-15-k-dimension-gsa-det-cbd-moment-v1"
@@ -529,6 +530,23 @@ def add_resources_at_optimum(candidate: dict, *, q: int = DEFAULT_Q) -> dict:
 
     prob_log2 = float(candidate["prob_log2"])
     adjusted = {key: value - prob_log2 for key, value in resources.items()}
+
+    # Clifford+T normalization used by the current NIST AES comparison.
+    # This is evaluated only at the selected optimum, so it does not slow the
+    # exhaustive (r,beta) objective search.
+    ft = QFT.compute_ft_resources_from_log2(n, r, resources)
+    ft_per_success = QFT.add_success_probability(ft, prob_log2)
+    maxdepth_rows = QFT.maxdepth_comparison(n, ft, prob_log2)
+    maxdepth_fields: dict[str, float | int | None] = {}
+    for row in maxdepth_rows:
+        h = int(row["h"])
+        maxdepth_fields[f"FT_MAXDEPTH_h{h}_gate_count_log2"] = float(
+            row["FT_MAXDEPTH_gate_count_log2"]
+        )
+        maxdepth_fields[f"NIST_AES_reference_h{h}_log2"] = row[
+            "NIST_AES_reference_log2"
+        ]
+
     qubits = total_qubit_upper_bound(n, r)
     return {
         **candidate,
@@ -546,6 +564,11 @@ def add_resources_at_optimum(candidate: dict, *, q: int = DEFAULT_Q) -> dict:
         "Hybrid_Toffoli_count_per_success_log2": adjusted["toffoli_count"],
         "Hybrid_Gate_depth_per_success_log2": adjusted["gate_depth"],
         "Hybrid_Gate_count_per_success_log2": adjusted["gate_count"],
+        # Clifford+T normalization and rotation-synthesis budget for the
+        # direct NIST AES comparison in the revised Section 7.4.
+        **ft,
+        **ft_per_success,
+        **maxdepth_fields,
         # Compatibility with older tables in the project.
         "Toffoli_cost_log2_hyp": adjusted["toffoli_count"],
     }
@@ -636,6 +659,83 @@ def search_best_for_n(
     return optimum
 
 
+def write_section7_ft_tables(
+    results: Mapping[int, Mapping[str, object]],
+    output_dir: str | os.PathLike[str] = "section7_results",
+) -> None:
+    """Write the three new Section 7.4 FT/NIST tables as CSV files.
+
+    The files are lightweight post-processing products of the selected optima:
+    ``rotation_synthesis_budget.csv``, ``ft_gate_resources.csv``, and
+    ``maxdepth_gate_comparison.csv``.
+    """
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    rotation_rows = []
+    ft_rows = []
+    maxdepth_rows = []
+    for n in sorted(results):
+        result = results[n]
+        label = QFT.instance_label(n)
+        rotation_rows.append(
+            {
+                "Parameter Set": label,
+                "n": n,
+                "r": int(result["r"]),
+                "log2_L": float(result["log2_L_rotation_budget"]),
+                "log2_N_R": float(result["rotation_count_log2"]),
+                "b_rot": int(result["rotation_precision_bits"]),
+                "T_R_per_rotation": int(result["rotation_T_per_gate"]),
+                "log2_N_R_T_R": float(result["rotation_T_count_log2"]),
+            }
+        )
+        ft_rows.append(
+            {
+                "Parameter Set": label,
+                "n": n,
+                "r": int(result["r"]),
+                "log2_D_FT": float(result["QSearch_FT_depth_log2"]),
+                "log2_G_FT": float(result["QSearch_FT_gate_count_log2"]),
+                "log2_T_FT": float(result["QSearch_FT_T_count_log2"]),
+                "log2_D_FT_per_success": float(
+                    result["Hybrid_FT_depth_per_success_log2"]
+                ),
+                "log2_G_FT_per_success": float(
+                    result["Hybrid_FT_gate_count_per_success_log2"]
+                ),
+                "log2_T_FT_per_success": float(
+                    result["Hybrid_FT_T_count_per_success_log2"]
+                ),
+            }
+        )
+        for h in QFT.MAXDEPTH_EXPONENTS:
+            maxdepth_rows.append(
+                {
+                    "Parameter Set": label,
+                    "n": n,
+                    "h": h,
+                    "log2_G_MD_FT": float(
+                        result[f"FT_MAXDEPTH_h{h}_gate_count_log2"]
+                    ),
+                    "NIST_AES_reference_log2": result.get(
+                        f"NIST_AES_reference_h{h}_log2"
+                    ),
+                }
+            )
+
+    pd.DataFrame(rotation_rows).to_csv(
+        output_path / "rotation_synthesis_budget.csv", index=False
+    )
+    pd.DataFrame(ft_rows).to_csv(
+        output_path / "ft_gate_resources.csv", index=False
+    )
+    pd.DataFrame(maxdepth_rows).to_csv(
+        output_path / "maxdepth_gate_comparison.csv", index=False
+    )
+
+
 def run_cost_estimation(
     n_list: Sequence[int] = (256, 512, 768, 1024),
     *,
@@ -664,6 +764,7 @@ def run_cost_estimation(
         "w", encoding="utf-8"
     ) as handle:
         json.dump(upper_bounds, handle, indent=2, sort_keys=True)
+    write_section7_ft_tables(results, output_path)
     return results
 
 
